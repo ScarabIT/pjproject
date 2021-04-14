@@ -196,7 +196,7 @@ class Expect(threading.Thread):
             self.proc.stdin.writelines(cmd + "\n")
             self.proc.stdin.flush()
         
-    def expect(self, pattern, raise_on_error=True, title=""):
+    def expect(self, pattern, raise_on_error=True, title="", timeout=15):
         # no prompt for telnet
         if self.use_telnet and pattern==const.PROMPT:
             return
@@ -221,7 +221,7 @@ class Expect(threading.Thread):
                         self.lock.release()
                         raise inc.TestError(self.name + ": " + line)
 
-            self.output = '\n'.join(lines[found_at+1:]) if found_at >= 0 else ""
+            self.output = '\n'.join(lines[found_at+1:])+"\n" if found_at >= 0 else ""
             self.lock.release()
             
             if found_at >= 0:
@@ -234,7 +234,7 @@ class Expect(threading.Thread):
             else:
                 t1 = time.time()
                 dur = int(t1 - t0)
-                if dur > 15:
+                if dur > timeout:
                     self.trace("Timed-out!")
                     if raise_on_error:
                         raise inc.TestError(self.name + " " + title + ": Timeout expecting pattern: \"" + pattern + "\"")
@@ -357,6 +357,7 @@ for p in script.test.process:
     try:
         # Wait until registration completes
         if p.inst_param.have_reg:
+            p.send("rr")
             p.expect(p.inst_param.uri+".*registration success")
          # Synchronize stdout
         if not p.use_telnet:
@@ -380,7 +381,7 @@ if script.test.test_func != None:
 # Shutdown all instances
 for p in script.test.process:
     # Unregister if we have_reg to make sure that next tests
-    # won't wail
+    # won't fail
     if p.inst_param.have_reg:
         p.send("ru")
         p.expect(p.inst_param.uri+".*unregistration success")

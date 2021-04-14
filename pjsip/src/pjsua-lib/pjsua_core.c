@@ -104,7 +104,7 @@ PJ_DEF(void) pjsua_config_default(pjsua_config *cfg)
 {
     pj_bzero(cfg, sizeof(*cfg));
 
-    cfg->max_calls = ((PJSUA_MAX_CALLS) < 4) ? (PJSUA_MAX_CALLS) : 4;
+    cfg->max_calls = PJSUA_MAX_CALLS;
     cfg->thread_cnt = PJSUA_SEPARATE_WORKER_FOR_TIMER? 2 : 1;
     cfg->nat_type_in_sdp = 1;
     cfg->stun_ignore_failure = PJ_TRUE;
@@ -365,6 +365,7 @@ PJ_DEF(void) pjsua_acc_config_default(pjsua_acc_config *cfg)
 			 PJSUA_REG_USE_ACC_PROXY;
 #if defined(PJMEDIA_STREAM_ENABLE_KA) && PJMEDIA_STREAM_ENABLE_KA!=0
     cfg->use_stream_ka = (PJMEDIA_STREAM_ENABLE_KA != 0);
+    pjmedia_stream_ka_config_default(&cfg->stream_ka_cfg);
 #endif
     pj_list_init(&cfg->reg_hdr_list);
     pj_list_init(&cfg->sub_hdr_list);
@@ -972,6 +973,7 @@ PJ_DEF(pj_status_t) pjsua_create(void)
     }
 
     /* Init timer entry and event list */
+    pj_list_init(&pjsua_var.active_timer_list);
     pj_list_init(&pjsua_var.timer_list);
     pj_list_init(&pjsua_var.event_list);
 
@@ -2879,20 +2881,27 @@ PJ_DEF(pj_status_t) pjsua_transport_close( pjsua_transport_id id,
 
     tp_type = pjsua_var.tpdata[id].type & ~PJSIP_TRANSPORT_IPV6;
 
-    /* Note: destroy() may not work if there are objects still referencing
-     *	     the transport.
-     */
     if (force) {
-	switch (tp_type) {
+    	/* Forcefully closing transport is deprecated, since any pending
+    	 * transactions that are using the transport may not terminate
+    	 * properly and can even crash.
+    	 */
+	PJ_LOG(1, (THIS_FILE, "pjsua_transport_close(force=PJ_TRUE) is "
+			      "deprecated."));
+    	
+    	/* To minimize the effect to users, we shouldn't hard-deprecate this
+    	 * and let it continue as if force is false.
+    	 */
+    	// return PJ_EINVAL;
+    }
+
+    /* If force is not specified, transports will be closed at their
+     * convenient time.
+     */
+    switch (tp_type) {
 	case PJSIP_TRANSPORT_UDP:
 	    status = pjsip_transport_shutdown(pjsua_var.tpdata[id].data.tp);
-	    if (status  != PJ_SUCCESS)
-		return status;
-	    status = pjsip_transport_destroy(pjsua_var.tpdata[id].data.tp);
-	    if (status != PJ_SUCCESS)
-		return status;
 	    break;
-
 	case PJSIP_TRANSPORT_TLS:
 	case PJSIP_TRANSPORT_TCP:
 	    /* This will close the TCP listener, but existing TCP/TLS
@@ -2900,41 +2909,21 @@ PJ_DEF(pj_status_t) pjsua_transport_close( pjsua_transport_id id,
 	     */
 	    status = (*pjsua_var.tpdata[id].data.factory->destroy)
 			(pjsua_var.tpdata[id].data.factory);
-	    if (status != PJ_SUCCESS)
-		return status;
-
 	    break;
-
 	default:
 	    return PJ_EINVAL;
-	}
-	
-    } else {
-	/* If force is not specified, transports will be closed at their
-	 * convenient time. However this will leak PJSUA-API transport
-	 * descriptors as PJSUA-API wouldn't know when exactly the
-	 * transport is closed thus it can't cleanup PJSUA transport
-	 * descriptor.
-	 */
-	switch (tp_type) {
-	case PJSIP_TRANSPORT_UDP:
-	    return pjsip_transport_shutdown(pjsua_var.tpdata[id].data.tp);
-	case PJSIP_TRANSPORT_TLS:
-	case PJSIP_TRANSPORT_TCP:
-	    return (*pjsua_var.tpdata[id].data.factory->destroy)
-			(pjsua_var.tpdata[id].data.factory);
-	default:
-	    return PJ_EINVAL;
-	}
     }
 
-    /* Cleanup pjsua data when force is applied */
-    if (force) {
-	pjsua_var.tpdata[id].type = PJSIP_TRANSPORT_UNSPECIFIED;
-	pjsua_var.tpdata[id].data.ptr = NULL;
+    /* Cleanup pjsua data. We don't need to keep the transport
+     * descriptor, the transport will be destroyed later by the last user
+     * which decrements the transport's reference.
+     */
+    if (status == PJ_SUCCESS) {
+    	pjsua_var.tpdata[id].type = PJSIP_TRANSPORT_UNSPECIFIED;
+    	pjsua_var.tpdata[id].data.ptr = NULL;
     }
 
-    return PJ_SUCCESS;
+    return status;
 }
 
 
@@ -3308,12 +3297,13 @@ static void timer_cb( pj_timer_heap_t *th,
 
     PJ_UNUSED_ARG(th);
 
-    pj_mutex_lock(pjsua_var.timer_mutex);
-    pj_list_push_back(&pjsua_var.timer_list, tmr);
-    pj_mutex_unlock(pjsua_var.timer_mutex);
-
     if (cb)
         (*cb)(user_data);
+
+    pj_mutex_lock(pjsua_var.timer_mutex);
+    pj_list_erase(tmr);
+    pj_list_push_back(&pjsua_var.timer_list, tmr);
+    pj_mutex_unlock(pjsua_var.timer_mutex);
 }
 
 /*
@@ -3355,7 +3345,9 @@ PJ_DEF(pj_status_t) pjsua_schedule_timer2( void (*cb)(void *user_data),
 #else
     status = pjsip_endpt_schedule_timer(pjsua_var.endpt, &tmr->entry, &delay);
 #endif
-    if (status != PJ_SUCCESS) {
+    if (status == PJ_SUCCESS) {
+    	pj_list_push_back(&pjsua_var.active_timer_list, tmr);
+    } else {
         pj_list_push_back(&pjsua_var.timer_list, tmr);
     }
 

@@ -304,7 +304,6 @@ PJ_DEF(pj_status_t) pjmedia_sdp_neg_modify_local_offer2(
 {
     pjmedia_sdp_session *new_offer;
     pjmedia_sdp_session *old_offer;
-    char media_used[PJMEDIA_MAX_SDP_MEDIA];
     unsigned oi; /* old offer media index */
     pj_status_t status;
 
@@ -323,8 +322,19 @@ PJ_DEF(pj_status_t) pjmedia_sdp_neg_modify_local_offer2(
     /* Change state to STATE_LOCAL_OFFER */
     neg->state = PJMEDIA_SDP_NEG_STATE_LOCAL_OFFER;
 
+    /* When there is no active local SDP in state PJMEDIA_SDP_NEG_STATE_DONE,
+     * it means that the previous initial SDP nego must have been failed,
+     * so we'll just set the local SDP offer here.
+     */
+    if (!neg->active_local_sdp) {
+	neg->initial_sdp_tmp = NULL;
+	neg->initial_sdp = pjmedia_sdp_session_clone(pool, local);
+	neg->neg_local_sdp = pjmedia_sdp_session_clone(pool, local);
+
+	return PJ_SUCCESS;
+    }
+
     /* Init vars */
-    pj_bzero(media_used, sizeof(media_used));
     old_offer = neg->active_local_sdp;
     new_offer = pjmedia_sdp_session_clone(pool, local);
 
@@ -447,7 +457,18 @@ PJ_DEF(pj_status_t) pjmedia_sdp_neg_send_local_offer( pj_pool_t *pool,
 	neg->state = PJMEDIA_SDP_NEG_STATE_LOCAL_OFFER;
 	neg->neg_local_sdp = pjmedia_sdp_session_clone(pool, 
 						       neg->active_local_sdp);
-	*offer = neg->active_local_sdp;
+
+#if PJMEDIA_SDP_NEG_COMPARE_BEFORE_INC_VERSION
+    	if (pjmedia_sdp_session_cmp(neg->neg_local_sdp, 
+    				    neg->initial_sdp, 0) != PJ_SUCCESS)
+    	{
+	    neg->neg_local_sdp->origin.version++;
+    	}    
+#else
+    	neg->neg_local_sdp->origin.version++;
+#endif
+
+	*offer = neg->neg_local_sdp;
 
     } else {
 	/* We assume that we're in STATE_LOCAL_OFFER.

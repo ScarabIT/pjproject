@@ -757,7 +757,7 @@ static void ice_init_complete_cb(void *user_data)
 {
     pjsua_call_media *call_med = (pjsua_call_media*)user_data;
 
-    if (call_med->call == NULL)
+    if (call_med->call == NULL || call_med->tp_ready == PJ_SUCCESS)
 	return;
 
     /* No need to acquire_call() if we only change the tp_ready flag
@@ -808,7 +808,8 @@ static void ice_failed_nego_cb(void *user_data)
 	return;
     }
 
-    pjsua_var.ua_cfg.cb.on_call_media_state(call_id);
+    if (!call->hanging_up)
+    	pjsua_var.ua_cfg.cb.on_call_media_state(call_id);
 
     if (dlg)
         pjsip_dlg_dec_lock(dlg);
@@ -843,12 +844,24 @@ static void on_ice_complete(pjmedia_transport *tp,
         } else {
 	    call_med->state = PJSUA_CALL_MEDIA_ERROR;
 	    call_med->dir = PJMEDIA_DIR_NONE;
-	    if (call && pjsua_var.ua_cfg.cb.on_call_media_state) {
+	    if (call && !call->hanging_up &&
+	        pjsua_var.ua_cfg.cb.on_call_media_state)
+	    {
 		/* Defer the callback to a timer */
 		pjsua_schedule_timer2(&ice_failed_nego_cb,
 				      (void*)(pj_ssize_t)call->index, 1);
 	    }
         }
+
+	/* Stop trickling */
+	if (call->trickle_ice.trickling < PJSUA_OP_STATE_DONE) {
+	    call->trickle_ice.trickling = PJSUA_OP_STATE_DONE;
+	    pjsua_cancel_timer(&call->trickle_ice.timer);
+	    PJ_LOG(4,(THIS_FILE, "Call %d: ICE trickle stopped trickling as "
+		      "ICE nego completed",
+		      call->index));
+	}
+
 	/* Check if default ICE transport address is changed */
         call->reinv_ice_sent = PJ_FALSE;
 	pjsua_call_schedule_reinvite_check(call, 0);
@@ -860,7 +873,9 @@ static void on_ice_complete(pjmedia_transport *tp,
 		         "ICE keep alive failure for transport %d:%d",
 		         call->index, call_med->idx));
 	}
-        if (pjsua_var.ua_cfg.cb.on_call_media_transport_state) {
+        if (!call->hanging_up &&
+            pjsua_var.ua_cfg.cb.on_call_media_transport_state)
+        {
             pjsua_med_tp_state_info info;
 
             pj_bzero(&info, sizeof(info));
@@ -923,6 +938,8 @@ static pj_status_t create_ice_media_transport(
     unsigned comp_cnt;
     pj_status_t status;
     pj_bool_t use_ipv6, use_nat64;
+    pj_bool_t trickle = PJ_FALSE;
+    pjmedia_sdp_session *rem_sdp;
 
     acc_cfg = &pjsua_var.acc[call_med->call->acc_id].cfg;
     use_ipv6 = (acc_cfg->ipv6_media_use != PJSUA_IPV6_DISABLED);
@@ -952,20 +969,46 @@ static pj_status_t create_ice_media_transport(
     ice_cfg.resolver = pjsua_var.resolver;
     
     ice_cfg.opt = acc_cfg->ice_cfg.ice_opt;
+    rem_sdp = call_med->call->async_call.rem_sdp;
 
-    if (call_med->call->async_call.rem_sdp) {
+    if (rem_sdp) {
     	/* Match the default address family according to the offer */
         const pj_str_t ID_IP6 = { "IP6", 3};
     	const pjmedia_sdp_media *m;
 	const pjmedia_sdp_conn *c;
 
-    	m = call_med->call->async_call.rem_sdp->media[call_med->idx];
-	c = m->conn? m->conn : call_med->call->async_call.rem_sdp->conn;
+	m = rem_sdp->media[call_med->idx];
+	c = m->conn? m->conn : rem_sdp->conn;
 
 	if (pj_stricmp(&c->addr_type, &ID_IP6) == 0)
 	    ice_cfg.af = pj_AF_INET6();
     } else if (use_ipv6 || use_nat64) {
     	ice_cfg.af = pj_AF_INET6();
+    }
+
+    /* Should not wait for ICE STUN/TURN ready when trickle ICE is enabled */
+    if (ice_cfg.opt.trickle != PJ_ICE_SESS_TRICKLE_DISABLED &&
+	(call_med->call->inv == NULL || 
+	 call_med->call->inv->state < PJSIP_INV_STATE_CONFIRMED))
+    {
+	if (rem_sdp) {
+	    /* As answerer: and when remote signals trickle ICE in SDP */
+	    trickle = pjmedia_ice_sdp_has_trickle(rem_sdp, call_med->idx);
+	    if (trickle) {
+		call_med->call->trickle_ice.remote_sup = PJ_TRUE;
+		call_med->call->trickle_ice.enabled = PJ_TRUE;
+	    }
+	} else {
+	    /* As offerer: and when trickle ICE mode is full */
+	    trickle = (ice_cfg.opt.trickle==PJ_ICE_SESS_TRICKLE_FULL);
+	    call_med->call->trickle_ice.enabled = PJ_TRUE;
+	}
+
+	/* Check if trickle ICE can start trickling/sending SIP INFO */
+	pjsua_ice_check_start_trickling(call_med->call, PJ_FALSE, NULL);
+    } else {
+	/* For non-initial INVITE, always use regular ICE */
+	ice_cfg.opt.trickle = PJ_ICE_SESS_TRICKLE_DISABLED;
     }
 
     /* If STUN transport is configured, initialize STUN transport settings */
@@ -1112,15 +1155,15 @@ static pj_status_t create_ice_media_transport(
     pj_bzero(&ice_cb, sizeof(pjmedia_ice_cb));
     ice_cb.on_ice_complete = &on_ice_complete;
     pj_ansi_snprintf(name, sizeof(name), "icetp%02d", call_med->idx);
-    call_med->tp_ready = PJ_EPENDING;
+    call_med->tp_ready = trickle? PJ_SUCCESS : PJ_EPENDING;
 
     comp_cnt = 1;
     if (PJMEDIA_ADVERTISE_RTCP && !acc_cfg->ice_cfg.ice_no_rtcp)
 	++comp_cnt;
 
     status = pjmedia_ice_create3(pjsua_var.med_endpt, name, comp_cnt,
-				 &ice_cfg, &ice_cb, 0, call_med,
-				 &call_med->tp);
+				 &ice_cfg, &ice_cb, PJSUA_ICE_TRANSPORT_OPTION,
+                                 call_med, &call_med->tp);
     if (status != PJ_SUCCESS) {
 	pjsua_perror(THIS_FILE, "Unable to create ICE media transport",
 		     status);
@@ -1128,7 +1171,7 @@ static pj_status_t create_ice_media_transport(
     }
 
     /* Wait until transport is initialized, or time out */
-    if (!async) {
+    if (!async && !trickle) {
 	pj_bool_t has_pjsua_lock = PJSUA_LOCK_IS_LOCKED();
 	pjsip_dialog *dlg = call_med->call->inv ?
 				call_med->call->inv->dlg : NULL;
@@ -1522,7 +1565,7 @@ pj_status_t on_media_event(pjmedia_event *event, void *user_data)
 }
 
 /* Call on_call_media_event() callback using timer */
-static void call_med_event_cb(void *user_data)
+void call_med_event_cb(void *user_data)
 {
     pjsua_event_list *eve = (pjsua_event_list *)user_data;
     
@@ -1544,7 +1587,6 @@ pj_status_t call_media_on_event(pjmedia_event *event,
     char ev_name[5];
     pj_status_t status = PJ_SUCCESS;
 
-    pj_assert(call && call_med);
     pjmedia_fourcc_name(event->type, ev_name);
     PJ_LOG(5,(THIS_FILE, "Call %d: Media %d: Received media event, type=%s, "
 			 "src=%p, epub=%p",
@@ -1660,6 +1702,9 @@ pj_status_t call_media_on_event(pjmedia_event *event,
     	pj_mutex_unlock(pjsua_var.timer_mutex);
     	
     	if (call) {
+    	    if (call->hanging_up)
+    	    	return status;
+
     	    eve->call_id = call->index;
     	    eve->med_idx = call_med->idx;
     	} else {
@@ -1678,7 +1723,8 @@ pj_status_t call_media_on_event(pjmedia_event *event,
 void pjsua_set_media_tp_state(pjsua_call_media *call_med,
                               pjsua_med_tp_st tp_st)
 {
-    if (pjsua_var.ua_cfg.cb.on_call_media_transport_state &&
+    if (!call_med->call->hanging_up &&
+        pjsua_var.ua_cfg.cb.on_call_media_transport_state &&
         call_med->tp_st != tp_st)
     {
         pjsua_med_tp_state_info info;
@@ -1713,7 +1759,9 @@ static void on_srtp_nego_complete(pjmedia_transport *tp,
     if (result != PJ_SUCCESS) {
 	call_med->state = PJSUA_CALL_MEDIA_ERROR;
 	call_med->dir = PJMEDIA_DIR_NONE;
-	if (call && pjsua_var.ua_cfg.cb.on_call_media_state) {
+	if (call && !call->hanging_up &&
+	    pjsua_var.ua_cfg.cb.on_call_media_state)
+	{
 	    /* Defer the callback to a timer */
 	    pjsua_schedule_timer2(&ice_failed_nego_cb,
 				  (void*)(pj_ssize_t)call->index, 1);
@@ -2027,8 +2075,11 @@ static pj_status_t media_channel_init_cb(pjsua_call_id call_id,
 	    call->med_ch_info.status = status;
 	    call->med_ch_info.sip_err_code = PJSIP_SC_TEMPORARILY_UNAVAILABLE;
 	}
-	pjsua_media_prov_clean_up(call_id);
-        goto on_return;
+
+	/* Revert back provisional media. */
+	pjsua_media_prov_revert(call_id);
+
+	goto on_return;
     }
 
     /* Tell the media transport of a new offer/answer session */
@@ -2070,7 +2121,10 @@ static pj_status_t media_channel_init_cb(pjsua_call_id call_id,
                 call->med_ch_info.med_idx = mi;
                 call->med_ch_info.state = call_med->tp_st;
                 call->med_ch_info.sip_err_code = PJSIP_SC_TEMPORARILY_UNAVAILABLE;
-		pjsua_media_prov_clean_up(call_id);
+
+		/* Revert back provisional media. */
+		pjsua_media_prov_revert(call_id);
+
 		goto on_return;
 	    }
 
@@ -2128,7 +2182,24 @@ void pjsua_media_prov_clean_up(pjsua_call_id call_id)
 	}
     }
     
-    call->med_prov_cnt = 0;
+    // Cleaning up unused media transports should not change provisional
+    // media count.
+    //call->med_prov_cnt = 0;
+}
+
+
+/* Revert back provisional media. */
+void pjsua_media_prov_revert(pjsua_call_id call_id)
+{
+    pjsua_call *call = &pjsua_var.calls[call_id];
+
+    /* Clean up unused media transport */
+    pjsua_media_prov_clean_up(call_id);
+
+    /* Copy provisional media from active media */
+    pj_memcpy(call->media_prov, call->media,
+	      sizeof(call->media[0]) * call->med_cnt);
+    call->med_prov_cnt = call->med_cnt;
 }
 
 
@@ -2422,9 +2493,26 @@ pj_status_t pjsua_media_channel_init(pjsua_call_id call_id,
                     return PJ_EPENDING;
                 }
 
-                pjsua_media_prov_clean_up(call_id);
+		/* Revert back provisional media. */
+		pjsua_media_prov_revert(call_id);
+
 		goto on_error;
 	    }
+
+	    /* Find and save "a=mid". Currently this is for trickle ICE.
+	     * Trickle ICE match media in SDP of SIP INFO by comparing this
+	     * attribute, so remote SDP must be received first before remote
+	     * SDP in SIP INFO can be processed.
+	     */
+	    if (rem_sdp && call_med->rem_mid.slen == 0) {
+		const pjmedia_sdp_media *m = rem_sdp->media[mi];
+		pjmedia_sdp_attr *a;
+
+		a = pjmedia_sdp_media_find_attr2(m, "mid", NULL);
+		if (a)
+		    call_med->rem_mid = a->value;
+	    }
+
 	} else {
 	    /* By convention, the media is disabled if transport is NULL 
 	     * or transport state is PJSUA_MED_TP_DISABLED.
@@ -2808,6 +2896,19 @@ pj_status_t pjsua_media_channel_create_sdp(pjsua_call_id call_id,
 		}
 	    }
 	}
+
+	/* Find and save "a=mid". Currently this is for trickle ICE. Trickle
+	 * ICE match media in SDP of SIP INFO by comparing this attribute,
+	 * so remote SDP must be received first before remote SDP in SIP INFO
+	 * can be processed.
+	 */
+	if (call_med->rem_mid.slen == 0) {
+	    pjmedia_sdp_attr *a;
+
+	    a = pjmedia_sdp_media_find_attr2(m, "mid", NULL);
+	    if (a)
+		call_med->rem_mid = a->value;
+	}
     }
 
     /* Add NAT info in the SDP */
@@ -2910,7 +3011,7 @@ pj_status_t pjsua_media_channel_create_sdp(pjsua_call_id call_id,
     call->rem_offerer = (rem_sdp != NULL);
 
     /* Notify application */
-    if (pjsua_var.ua_cfg.cb.on_call_sdp_created) {
+    if (!call->hanging_up && pjsua_var.ua_cfg.cb.on_call_sdp_created) {
 	(*pjsua_var.ua_cfg.cb.on_call_sdp_created)(call_id, sdp,
 						   pool, rem_sdp);
     }
@@ -3020,6 +3121,16 @@ pj_status_t pjsua_media_channel_deinit(pjsua_call_id call_id)
     pj_log_push_indent();
 
     stop_media_session(call_id);
+
+    /* Stop trickle ICE timer */
+    if (call->trickle_ice.trickling > PJSUA_OP_STATE_NULL) {
+	call->trickle_ice.trickling = PJSUA_OP_STATE_NULL;
+	pjsua_cancel_timer(&call->trickle_ice.timer);
+    }
+    call->trickle_ice.enabled = PJ_FALSE;
+    call->trickle_ice.pending_info = PJ_FALSE;
+    call->trickle_ice.remote_sup = PJ_FALSE;
+    call->trickle_ice.retrans18x_count = 0;
 
     /* Clean up media transports */
     pjsua_media_prov_clean_up(call_id);

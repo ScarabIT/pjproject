@@ -650,6 +650,7 @@ openssl_h_present
 ac_ssl_backend
 ac_ssl_has_aes_gcm
 ac_no_ssl
+ac_no_mediacodec
 ac_vpx_ldflags
 ac_vpx_cflags
 ac_openh264_ldflags
@@ -681,6 +682,9 @@ ac_darwin_cflags
 ac_pjmedia_video_has_ios_opengl
 ac_pjmedia_video_has_vtoolbox
 ac_pjmedia_video_has_darwin
+ac_dshow_ldflags
+ac_dshow_cflags
+ac_pjmedia_video_dev_has_dshow
 ac_android_cflags
 ac_pjmedia_video_has_android
 ac_pjmedia_video
@@ -697,6 +701,7 @@ ac_external_srtp_lib
 ac_external_srtp
 ac_external_gsm
 ac_external_speex
+ac_no_pjsua2
 ac_shared_libraries
 ac_linux_poll
 ac_os_objs
@@ -788,6 +793,7 @@ enable_option_checking
 enable_floating_point
 enable_epoll
 enable_shared
+enable_pjsua2
 with_external_speex
 with_external_gsm
 with_external_srtp
@@ -823,6 +829,7 @@ enable_ipp
 with_ipp
 with_ipp_samples
 with_ipp_arch
+enable_android_mediacodec
 with_ssl
 with_gnutls
 enable_darwin_ssl
@@ -1470,6 +1477,8 @@ Optional Features:
                           Disable floating point where possible
   --enable-epoll          Use /dev/epoll ioqueue on Linux (experimental)
   --enable-shared         Build shared libraries
+  --disable-pjsua2        Exclude pjsua2 library and application from the
+                          build
   --disable-resample      Disable resampling implementations
   --disable-sound         Exclude sound (i.e. use null sound)
   --disable-video         Disable video feature
@@ -1495,6 +1504,8 @@ Optional Features:
                           package and samples location using IPPROOT and
                           IPPSAMPLES env var or with --with-ipp and
                           --with-ipp-samples options
+  --disable-android-mediacodec
+                          Exclude Android MediaCodec (default: autodetect)
   --disable-darwin-ssl    Exclude Darwin SSL (default: autodetect)
   --disable-ssl           Exclude SSL support the build (default: autodetect)
 
@@ -5160,6 +5171,12 @@ case $target in
 
 	$as_echo "#define WIN32_LEAN_AND_MEAN 1" >>confdefs.h
 
+	case $target in
+	    *_64-w64-mingw* )
+		$as_echo "#define PJ_WIN64 1" >>confdefs.h
+
+	    ;;
+	esac
 	;;
     *darwin*)
 	$as_echo "#define PJ_DARWINOS 1" >>confdefs.h
@@ -5933,6 +5950,21 @@ fi
 
 
 
+# Check whether --enable-pjsua2 was given.
+if test "${enable_pjsua2+set}" = set; then :
+  enableval=$enable_pjsua2; if test "$enable_pjsua2" = "no"; then
+		ac_no_pjsua2=1
+		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: Building pjsua2 library and application... no" >&5
+$as_echo "Building pjsua2 library and application... no" >&6; }
+	       fi
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: Building pjsua2 library and application... yes" >&5
+$as_echo "Building pjsua2 library and application... yes" >&6; }
+
+fi
+
+
+
 case $target in
   *mingw* | *cygw* | *win32* | *w32* )
 	ac_os_objs="$ac_os_objs file_access_win32.o file_io_win32.o os_core_win32.o os_error_win32.o os_time_win32.o os_timestamp_win32.o guid_win32.o sock_qos_bsd.o unicode_win32.o"
@@ -5954,6 +5986,12 @@ case $target in
 		;;
 	  *)
 		ac_os_objs="$ac_os_objs sock_qos_bsd.o"
+		;;
+	esac
+	# SSL
+	case $target in
+	  *darwin*)
+		ac_os_objs="$ac_os_objs ssl_sock_apple.o"
 		;;
 	esac
 	# UUID
@@ -6469,10 +6507,12 @@ fi
 
 
 
-# Disable video on mingw
+# Disable video on mingw by default (but respect --enable-video=yes)
 case $target in
  *mingw*)
+	if test ! "$enable_video" = "yes"; then
 	enable_video="no"
+	fi
 	;;
 esac
 
@@ -6543,6 +6583,18 @@ $as_echo "Checking if OpenGL ES 2 is available... yes" >&6; }
 $as_echo "Checking if OpenGL ES 2 is available... no" >&6; }
 	fi
 	ac_android_cflags="$ac_android_cflags -DPJMEDIA_VIDEO_DEV_HAS_ANDROID=1"
+	;;
+  *mingw*)
+	if test "$enable_video" = "yes"; then
+	  ac_pjmedia_video=windows_os
+
+	  ac_pjmedia_video_dev_has_dshow=yes
+
+	  ac_dshow_cflags="-DPJMEDIA_HAS_VIDEO=1 -DPJMEDIA_VIDEO_DEV_HAS_DSHOW=1"
+
+	  ac_dshow_ldflags=" -lstdc++ -lquartz -lole32 -loleaut32 -lrpcrt4 -lwinmm -luuid -lmingwex -lstrmiids "
+	  LIBS="$LIBS -lstdc++ -lquartz -lole32 -loleaut32 -lrpcrt4 -lwinmm -luuid -lmingwex -lstrmiids "
+	fi
 	;;
   *darwin*)
 	ac_pjmedia_video=darwin_os
@@ -7052,6 +7104,7 @@ $as_echo "not found" >&6; }
 			ac_sdl_cflags=`$SDL_CONFIG --cflags`
 			ac_sdl_cflags="-DPJMEDIA_VIDEO_DEV_HAS_SDL=1 $ac_sdl_cflags"
 			ac_sdl_ldflags=`$SDL_CONFIG --libs`
+			ac_sdl_ldflags=${ac_sdl_ldflags//-mwindows/}
 			LIBS="$LIBS $ac_sdl_ldflags"
 		  else
 			{ $as_echo "$as_me:${as_lineno-$LINENO}: result: Unsupported SDL version" >&5
@@ -8007,6 +8060,73 @@ export IPP_LIBS=$IPP_LIBS"
 else
     { $as_echo "$as_me:${as_lineno-$LINENO}: result: Skipping Intel IPP settings (not wanted)" >&5
 $as_echo "Skipping Intel IPP settings (not wanted)" >&6; }
+fi
+
+
+
+# Check whether --enable-android-mediacodec was given.
+if test "${enable_android_mediacodec+set}" = set; then :
+  enableval=$enable_android_mediacodec; if test "$enable_android_mediacodec" = "no"; then
+	     ac_no_mediacodec=1
+		 { $as_echo "$as_me:${as_lineno-$LINENO}: result: Checking if Android MediaCodec support is disabled... yes" >&5
+$as_echo "Checking if Android MediaCodec support is disabled... yes" >&6; }
+	        fi
+else
+
+		case $target in
+        *android*)
+	      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for AMediaCodec_createDecoderByType in -lmediandk" >&5
+$as_echo_n "checking for AMediaCodec_createDecoderByType in -lmediandk... " >&6; }
+if ${ac_cv_lib_mediandk_AMediaCodec_createDecoderByType+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lmediandk  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char AMediaCodec_createDecoderByType ();
+int
+main ()
+{
+return AMediaCodec_createDecoderByType ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_mediandk_AMediaCodec_createDecoderByType=yes
+else
+  ac_cv_lib_mediandk_AMediaCodec_createDecoderByType=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_mediandk_AMediaCodec_createDecoderByType" >&5
+$as_echo "$ac_cv_lib_mediandk_AMediaCodec_createDecoderByType" >&6; }
+if test "x$ac_cv_lib_mediandk_AMediaCodec_createDecoderByType" = xyes; then :
+  ac_pjmedia_has_amediacodec=1 && LIBS="-lmediandk $LIBS"
+fi
+
+	      if test "x$ac_pjmedia_has_amediacodec" = "x1"; then
+		    { $as_echo "$as_me:${as_lineno-$LINENO}: result: Checking if Android AMediaCodec library is available... yes" >&5
+$as_echo "Checking if Android AMediaCodec library is available... yes" >&6; }
+		    $as_echo "#define PJMEDIA_HAS_ANDROID_MEDIACODEC 1" >>confdefs.h
+
+	      else
+		    { $as_echo "$as_me:${as_lineno-$LINENO}: result: Checking if Android AMediaCodec library is available... no" >&5
+$as_echo "Checking if Android AMediaCodec library is available... no" >&6; }
+	      fi
+		  ;;
+		esac
+
 fi
 
 
@@ -9048,6 +9168,10 @@ $as_echo "Checking if libwebrtc is disabled...no" >&6; }
                                  ac_webrtc_instset=neon
                                  ac_webrtc_cflags="-DWEBRTC_ARCH_ARMV7 -mfloat-abi=hard -mfpu=neon"
                                  ;;
+			     arm-apple-darwin*)
+				 ac_webrtc_instset=neon
+				 ac_webrtc_cflags="-DWEBRTC_ARCH_ARM64"
+			    	 ;;
                              *)
                                  ac_webrtc_instset=sse2
                                  ;;
