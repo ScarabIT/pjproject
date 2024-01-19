@@ -1,4 +1,3 @@
-# $Id$
 import random
 import config_site
 import socket
@@ -68,7 +67,7 @@ class InstanceParam:
 					s.bind(("0.0.0.0", port))
 				except socket.error as serr:
 					s.close()
-					if serr.errno ==  errno.EADDRINUSE:
+					if serr.errno ==  errno.EADDRINUSE or serr.errno == errno.EACCES:
 						continue
 				s.close()
 				break;
@@ -90,7 +89,7 @@ class InstanceParam:
 					s.bind(("0.0.0.0", port))
 				except socket.error as serr:
 					s.close()
-					if serr.errno ==  errno.EADDRINUSE:
+					if serr.errno ==  errno.EADDRINUSE or serr.errno ==  errno.EACCES:
 						continue
 				s.close()
 				break;
@@ -149,7 +148,7 @@ class TestParam:
 
 ###################################
 # TestError exception
-class TestError:
+class TestError(Exception):
 	desc = ""
 	def __init__(self, desc):
 		self.desc = desc

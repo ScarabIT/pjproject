@@ -1,13 +1,12 @@
-# $Id$
-import imp
 import sys
 import inc_sip as sip
 import inc_const as const
+import inc_util as util
 import re
 from inc_cfg import *
 
 # Read configuration
-cfg_file = imp.load_source("cfg_file", ARGS[1])
+cfg_file = util.load_module_from_file("cfg_file", ARGS[1])
 
 # Default server port (should we randomize?)
 srv_port = 50070
@@ -18,10 +17,20 @@ def test_func(test):
              local_port=srv_port, 
              tcp=cfg_file.recvfrom_cfg.tcp)
 
+    config = pjsua.get_config(cfg_file.recvfrom_cfg.pj_config)
+    print("Config : " + config)
+
     last_cseq = 0
     last_method = ""
     last_call_id = ""
     for t in cfg_file.recvfrom_cfg.transaction:
+        # Check if transaction requires configuration
+        if t.pj_config != "":
+            r = re.compile(t.pj_config, re.I)
+            if r.search(config) == None:
+                print("Configuration : " + t.pj_config + " not found, skipping")
+                continue
+
         # Print transaction title
         if t.title != "":
             dlg.trace(t.title)

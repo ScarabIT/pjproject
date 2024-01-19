@@ -1,4 +1,3 @@
-# $Id$
 #
 # pjsua Python GUI Demo
 #
@@ -208,7 +207,7 @@ class Chat(gui.ChatObserver):
         # it is a temporary one and not really registered to acc
         bud = None
         try:
-            bud = self._acc.findBuddy(uri_str)
+            bud = self._acc.findBuddy2(uri_str)
         except:
             bud = buddy.Buddy(None)
             bud_cfg = pj.BuddyConfig()

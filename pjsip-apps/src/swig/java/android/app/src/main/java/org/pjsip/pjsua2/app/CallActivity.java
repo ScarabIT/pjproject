@@ -1,4 +1,3 @@
-/* $Id: CallActivity.java 5138 2015-07-30 06:23:35Z ming $ */
 /*
  * Copyright (C) 2013 Teluu Inc. (http://www.teluu.com)
  *
@@ -28,6 +27,8 @@ import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.app.Activity;
 import android.content.Context;
@@ -35,104 +36,101 @@ import android.content.res.Configuration;
 
 import org.pjsip.pjsua2.*;
 
-class VideoPreviewHandler implements SurfaceHolder.Callback
-{   
-    public boolean videoPreviewActive = false;
-        
-    public void updateVideoPreview(SurfaceHolder holder) 
-    {
-	if (MainActivity.currentCall != null &&
-	    MainActivity.currentCall.vidWin != null &&
-	    MainActivity.currentCall.vidPrev != null)
-	{	
-	    if (videoPreviewActive) {
-		VideoWindowHandle vidWH = new VideoWindowHandle();
-		vidWH.getHandle().setWindow(holder.getSurface());
-		VideoPreviewOpParam vidPrevParam = new VideoPreviewOpParam();
-		vidPrevParam.setWindow(vidWH);		
-		try {
-		    MainActivity.currentCall.vidPrev.start(vidPrevParam);
-		} catch (Exception e) {
-		    System.out.println(e);
-		}
-	    } else {
-		try {
-		    MainActivity.currentCall.vidPrev.stop();
-		} catch (Exception e) {
-		    System.out.println(e);
-		}	
-	    }
-	}
-    }    
-    
+
+class VideoSurfaceHandler implements SurfaceHolder.Callback {
+    private SurfaceHolder holder;
+    private VideoWindow videoWindow = null;
+    private boolean active = false;
+
+    public VideoSurfaceHandler(SurfaceHolder holder_) {
+        holder = holder_;
+    }
+
+    public void setVideoWindow(VideoWindow vw) {
+        videoWindow = vw;
+        active = true;
+        setSurfaceHolder(holder);
+    }
+
+    public void resetVideoWindow() {
+        active = false;
+        videoWindow = null;
+    }
+
+    private void setSurfaceHolder(SurfaceHolder holder) {
+        if (!active) return;
+
+        try {
+            VideoWindowHandle wh = new VideoWindowHandle();
+            wh.getHandle().setWindow(holder != null? holder.getSurface() : null);
+            videoWindow.setWindow(wh);
+        } catch (Exception e) {
+            System.out.println(e);
+        }
+    }
+
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int w, int h)
     {
-	updateVideoPreview(holder);
+        setSurfaceHolder(holder);
     }
 
     @Override
-    public void surfaceCreated(SurfaceHolder holder) 
-    {
-	
-    }
+    public void surfaceCreated(SurfaceHolder holder) { }
+
 
     @Override
-    public void surfaceDestroyed(SurfaceHolder holder) 
+    public void surfaceDestroyed(SurfaceHolder holder)
     {
-	try {
-	    MainActivity.currentCall.vidPrev.stop();
-	} catch (Exception e) {
-	    System.out.println(e);
-	}
-    }    
+        setSurfaceHolder(null);
+    }
 }
 
+
 public class CallActivity extends Activity
-			  implements Handler.Callback, SurfaceHolder.Callback
+                          implements Handler.Callback
 {
 
     public static Handler handler_;
-    private static VideoPreviewHandler previewHandler = 
-	    					      new VideoPreviewHandler();
-
     private final Handler handler = new Handler(this);
     private static CallInfo lastCallInfo;
+
+    private VideoSurfaceHandler localVideoHandler;
+    private VideoSurfaceHandler remoteVideoHandler;
 
     @Override
     protected void onCreate(Bundle savedInstanceState)
     {
-	super.onCreate(savedInstanceState);
-	setContentView(R.layout.activity_call);
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_call);
 
-	SurfaceView surfaceInVideo = (SurfaceView)
-				  findViewById(R.id.surfaceIncomingVideo);
-	SurfaceView surfacePreview = (SurfaceView)
-		  		  findViewById(R.id.surfacePreviewCapture);	
-	Button buttonShowPreview = (Button) 
-		  		  findViewById(R.id.buttonShowPreview);	
-	
-	if (MainActivity.currentCall == null ||
-	    MainActivity.currentCall.vidWin == null)
-	{
-	    surfaceInVideo.setVisibility(View.GONE);	    
-	    buttonShowPreview.setVisibility(View.GONE);
-	}
-	setupVideoPreview(surfacePreview, buttonShowPreview);
-	surfaceInVideo.getHolder().addCallback(this);
-	surfacePreview.getHolder().addCallback(previewHandler);
+        SurfaceView surfaceInVideo = findViewById(R.id.surfaceIncomingVideo);
+        SurfaceView surfacePreview = findViewById(R.id.surfacePreviewCapture);
 
-	handler_ = handler;
-	if (MainActivity.currentCall != null) {
-	    try {
-		lastCallInfo = MainActivity.currentCall.getInfo();
-		updateCallState(lastCallInfo);
-	    } catch (Exception e) {
-		System.out.println(e);
-	    }
-	} else {
-	    updateCallState(lastCallInfo);
-	}
+        /* Avoid visible black boxes (blank video views) initially */
+        if (MainActivity.currentCall == null ||
+            MainActivity.currentCall.vidWin == null)
+        {
+            surfaceInVideo.setVisibility(View.GONE);
+            surfacePreview.setVisibility(View.GONE);
+        }
+
+        localVideoHandler = new VideoSurfaceHandler(surfacePreview.getHolder());
+        remoteVideoHandler = new VideoSurfaceHandler(surfaceInVideo.getHolder());
+        surfaceInVideo.getHolder().addCallback(remoteVideoHandler);
+        surfacePreview.getHolder().addCallback(localVideoHandler);
+
+        handler_ = handler;
+        if (MainActivity.currentCall != null) {
+            try {
+                lastCallInfo = MainActivity.currentCall.getInfo();
+                updateCallState(lastCallInfo);
+            } catch (Exception e) {
+                System.out.println(e);
+            }
+        } else {
+            updateCallState(lastCallInfo);
+        }
     }
 
     @Override
@@ -168,204 +166,228 @@ public class CallActivity extends Activity
 
         if (MyApp.ep != null && MainActivity.account != null) {
             try {
-        	AccountConfig cfg = MainActivity.account.cfg;
-        	int cap_dev = cfg.getVideoConfig().getDefaultCaptureDevice();
-        	MyApp.ep.vidDevManager().setCaptureOrient(cap_dev, orient,
-        						  true);
+                AccountConfig cfg = MainActivity.account.cfg;
+                int cap_dev = cfg.getVideoConfig().getDefaultCaptureDevice();
+                MyApp.ep.vidDevManager().setCaptureOrient(cap_dev, orient,
+                                                          true);
             } catch (Exception e) {
-        	System.out.println(e);
+                System.out.println(e);
             }
         }
-    }    
+    }
 
     @Override
     protected void onDestroy()
     {
-	super.onDestroy();
-	handler_ = null;
+        super.onDestroy();
+        handler_ = null;
     }
     
-    private void updateVideoWindow(boolean show)
-    { 
-	if (MainActivity.currentCall != null &&
-	    MainActivity.currentCall.vidWin != null &&
-	    MainActivity.currentCall.vidPrev != null)
-	{
-	    SurfaceView surfaceInVideo = (SurfaceView) 
-		       		  findViewById(R.id.surfaceIncomingVideo);
-	    
-	    VideoWindowHandle vidWH = new VideoWindowHandle();	    
-	    if (show) {
-		vidWH.getHandle().setWindow(
-				       surfaceInVideo.getHolder().getSurface());
-	    } else {
-		vidWH.getHandle().setWindow(null);
-	    }
-	    try {
-		MainActivity.currentCall.vidWin.setWindow(vidWH);
-	    } catch (Exception e) {
-		System.out.println(e);
-	    }	    
-	}
-    }
-     
-    public void surfaceChanged(SurfaceHolder holder, int format, int w, int h)
+    private void setupIncomingVideoLayout()
     {
-	updateVideoWindow(true);
+        try {
+            StreamInfo si = MainActivity.currentCall.getStreamInfo(MainActivity.currentCall.vidGetStreamIdx());
+            int w = (int)si.getVidCodecParam().getDecFmt().getWidth();
+            int h = (int)si.getVidCodecParam().getDecFmt().getHeight();
+
+            /* Adjust width to match the parent layout */
+            RelativeLayout videoLayout = findViewById(R.id.bottom_layout);
+            h = (int)((double)videoLayout.getMeasuredWidth() / w * h);
+            w = videoLayout.getMeasuredWidth();
+
+            /* Also adjust height to match the parent layout */
+            if (h > videoLayout.getMeasuredHeight()) {
+                w = (int)((double)videoLayout.getMeasuredHeight() / h * w);
+                h = videoLayout.getMeasuredHeight();
+            }
+            System.out.println("Remote video size=" + w + "x" + h);
+
+            /* Resize the remote video surface */
+            SurfaceView svRemoteVideo = findViewById(R.id.surfaceIncomingVideo);
+            RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(w, h);
+            params.leftMargin = (w == videoLayout.getMeasuredWidth())? 0 : (videoLayout.getMeasuredWidth()-w)/2;
+            params.topMargin = 0;
+            svRemoteVideo.setLayoutParams(params);
+            svRemoteVideo.setVisibility(View.VISIBLE);
+
+            /* Put local preview always on top */
+            if (MainActivity.currentCall.vidPrevStarted) {
+                SurfaceView surfacePreview = findViewById(R.id.surfacePreviewCapture);
+                surfacePreview.setVisibility(View.VISIBLE);
+            }
+        } catch (Exception e) {
+            System.out.println(e);
+        }
     }
 
-    public void surfaceCreated(SurfaceHolder holder)
+    public void setupVideoPreviewLayout()
     {
-    }
+        /* Resize the preview video surface */
+        try {
+            int w, h;
+            SurfaceView surfacePreview = findViewById(R.id.surfacePreviewCapture);
+            VideoWindowInfo vwi = MainActivity.currentCall.vidPrev.getVideoWindow().getInfo();
+            w = (int) vwi.getSize().getW();
+            h = (int) vwi.getSize().getH();
 
-    public void surfaceDestroyed(SurfaceHolder holder)
-    {
-	updateVideoWindow(false);
+            /* Adjust width to match the parent layout */
+            RelativeLayout videoLayout = findViewById(R.id.bottom_layout);
+            h = (int) ((double) videoLayout.getMeasuredWidth() / 2 / w * h);
+            w = videoLayout.getMeasuredWidth() / 2;
+
+            /* Also adjust height to match the parent layout */
+            if (h > videoLayout.getMeasuredHeight() / 2) {
+                w = (int) ((double) videoLayout.getMeasuredHeight() / 2 / h * w);
+                h = videoLayout.getMeasuredHeight() / 2;
+            }
+            System.out.println("Preview video size=" + w + "x" + h);
+
+            RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(w, h);
+            params.leftMargin = videoLayout.getMeasuredWidth() - w;
+            params.topMargin = videoLayout.getMeasuredHeight() - h;
+            surfacePreview.setLayoutParams(params);
+            surfacePreview.setVisibility(View.VISIBLE);
+        } catch (Exception e) {
+            System.out.println(e);
+        }
     }
 
     public void acceptCall(View view)
     {
-	CallOpParam prm = new CallOpParam();
-	prm.setStatusCode(pjsip_status_code.PJSIP_SC_OK);
-	try {
-	    MainActivity.currentCall.answer(prm);
-	} catch (Exception e) {
-	    System.out.println(e);
-	}
+        CallOpParam prm = new CallOpParam();
+        prm.setStatusCode(pjsip_status_code.PJSIP_SC_OK);
+        try {
+            MainActivity.currentCall.answer(prm);
+        } catch (Exception e) {
+            System.out.println(e);
+        }
 
-	view.setVisibility(View.GONE);
+        view.setVisibility(View.GONE);
     }
 
     public void hangupCall(View view)
     {
-	handler_ = null;
-	finish();
+        localVideoHandler.resetVideoWindow();
+        remoteVideoHandler.resetVideoWindow();
 
-	if (MainActivity.currentCall != null) {
-	    CallOpParam prm = new CallOpParam();
-	    prm.setStatusCode(pjsip_status_code.PJSIP_SC_DECLINE);
-	    try {
-		MainActivity.currentCall.hangup(prm);
-	    } catch (Exception e) {
-		System.out.println(e);
-	    }
-	}
+        handler_ = null;
+        finish();
+
+        if (MainActivity.currentCall != null) {
+            CallOpParam prm = new CallOpParam();
+            prm.setStatusCode(pjsip_status_code.PJSIP_SC_DECLINE);
+            try {
+                MainActivity.currentCall.hangup(prm);
+            } catch (Exception e) {
+                System.out.println(e);
+            }
+        }
     }
     
-    public void setupVideoPreview(SurfaceView surfacePreview, 
-	    			  Button buttonShowPreview)
-    {
-	surfacePreview.setVisibility(previewHandler.videoPreviewActive?
-		     		     View.VISIBLE:View.GONE);
-	
-	buttonShowPreview.setText(previewHandler.videoPreviewActive?
-		  		  getString(R.string.hide_preview):
-		  		  getString(R.string.show_preview));		
-    }
-    
-    public void showPreview(View view)
-    {
-	SurfaceView surfacePreview = (SurfaceView)
-		  	          findViewById(R.id.surfacePreviewCapture);	
-
-	Button buttonShowPreview = (Button) 
-		  		  findViewById(R.id.buttonShowPreview);
-	
-	
-	previewHandler.videoPreviewActive = !previewHandler.videoPreviewActive;
-	
-	setupVideoPreview(surfacePreview, buttonShowPreview);
-	
-	previewHandler.updateVideoPreview(surfacePreview.getHolder());
-    }
-
-    private void setupVideoSurface()
-    {
-	SurfaceView surfaceInVideo = (SurfaceView)
-				  findViewById(R.id.surfaceIncomingVideo);
-	SurfaceView surfacePreview = (SurfaceView)
-		  		  findViewById(R.id.surfacePreviewCapture);
-	Button buttonShowPreview = (Button)
-		  		  findViewById(R.id.buttonShowPreview);	
-	surfaceInVideo.setVisibility(View.VISIBLE);
-	buttonShowPreview.setVisibility(View.VISIBLE);
-	surfacePreview.setVisibility(View.GONE);	
-    }
 
     @Override
     public boolean handleMessage(Message m)
     {
-	if (m.what == MainActivity.MSG_TYPE.CALL_STATE) {
+        if (m.what == MainActivity.MSG_TYPE.CALL_STATE) {
 
-	    lastCallInfo = (CallInfo) m.obj;
-	    updateCallState(lastCallInfo);
+            lastCallInfo = (CallInfo) m.obj;
+            if (lastCallInfo.getState()==pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED) {
+                localVideoHandler.resetVideoWindow();
+                remoteVideoHandler.resetVideoWindow();
+            }
 
-	} else if (m.what == MainActivity.MSG_TYPE.CALL_MEDIA_STATE) {
+            updateCallState(lastCallInfo);
 
-	    if (MainActivity.currentCall.vidWin != null) {
-		/* Set capture orientation according to current
-		 * device orientation.
-		 */
-		onConfigurationChanged(getResources().getConfiguration());
-		/* If there's incoming video, display it. */
-		setupVideoSurface();
-	    }
+        } else if (m.what == MainActivity.MSG_TYPE.CALL_MEDIA_STATE) {
 
-	} else {
+            if (MainActivity.currentCall.vidWin != null) {
+                /* Set capture orientation according to current
+                 * device orientation.
+                 */
+                onConfigurationChanged(getResources().getConfiguration());
 
-	    /* Message not handled */
-	    return false;
+            }
 
-	}
+            if (MainActivity.currentCall.vidPrev != null) {
+                localVideoHandler.setVideoWindow(MainActivity.currentCall.vidPrev.getVideoWindow());
+                setupVideoPreviewLayout();
+            }
 
-	return true;
+        } else if (m.what == MainActivity.MSG_TYPE.CALL_MEDIA_EVENT) {
+            OnCallMediaEventParam prm = (OnCallMediaEventParam)m.obj;
+
+            if (prm.getEv().getType() == pjmedia_event_type.PJMEDIA_EVENT_FMT_CHANGED &&
+                prm.getMedIdx() == MainActivity.currentCall.vidGetStreamIdx() &&
+                MainActivity.currentCall.vidWin != null)
+            {
+                CallMediaInfo cmi;
+                try {
+                    CallInfo ci = MainActivity.currentCall.getInfo();
+                    cmi = ci.getMedia().get((int)prm.getMedIdx());
+                } catch (Exception e) {
+                    System.out.println(e);
+                    return false;
+                }
+
+                remoteVideoHandler.setVideoWindow(cmi.getVideoWindow());
+                setupIncomingVideoLayout();
+            }
+
+        } else {
+
+            /* Message not handled */
+            return false;
+
+        }
+
+        return true;
     }
 
     private void updateCallState(CallInfo ci) {
-	TextView tvPeer  = (TextView) findViewById(R.id.textViewPeer);
-	TextView tvState = (TextView) findViewById(R.id.textViewCallState);
-	Button buttonHangup = (Button) findViewById(R.id.buttonHangup);
-	Button buttonAccept = (Button) findViewById(R.id.buttonAccept);
-	String call_state = "";
+        TextView tvPeer  = (TextView) findViewById(R.id.textViewPeer);
+        TextView tvState = (TextView) findViewById(R.id.textViewCallState);
+        Button buttonHangup = (Button) findViewById(R.id.buttonHangup);
+        Button buttonAccept = (Button) findViewById(R.id.buttonAccept);
+        String call_state = "";
 
         if (ci == null) {
-	    buttonAccept.setVisibility(View.GONE);
-	    buttonHangup.setText("OK");
-	    tvState.setText("Call disconnected");
-	    return;
-	}
+            buttonAccept.setVisibility(View.GONE);
+            buttonHangup.setText("OK");
+            tvState.setText("Call disconnected");
+            return;
+        }
 
-	if (ci.getRole() == pjsip_role_e.PJSIP_ROLE_UAC) {
-	    buttonAccept.setVisibility(View.GONE);
-	}
+        if (ci.getRole() == pjsip_role_e.PJSIP_ROLE_UAC) {
+            buttonAccept.setVisibility(View.GONE);
+        }
 
-	if (ci.getState() <
-	    pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED)
-	{
-	    if (ci.getRole() == pjsip_role_e.PJSIP_ROLE_UAS) {
-		call_state = "Incoming call..";
-		/* Default button texts are already 'Accept' & 'Reject' */
-	    } else {
-		buttonHangup.setText("Cancel");
-		call_state = ci.getStateText();
-	    }
-	}
-	else if (ci.getState() >=
-		 pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED)
-	{
-	    buttonAccept.setVisibility(View.GONE);
-	    call_state = ci.getStateText();
-	    if (ci.getState() == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED) {
-		buttonHangup.setText("Hangup");
-	    } else if (ci.getState() ==
-		       pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED)
-	    {
-		buttonHangup.setText("OK");
-		call_state = "Call disconnected: " + ci.getLastReason();
-	    }
-	}
+        if (ci.getState() <
+            pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED)
+        {
+            if (ci.getRole() == pjsip_role_e.PJSIP_ROLE_UAS) {
+                call_state = "Incoming call..";
+                /* Default button texts are already 'Accept' & 'Reject' */
+            } else {
+                buttonHangup.setText("Cancel");
+                call_state = ci.getStateText();
+            }
+        }
+        else if (ci.getState() >=
+                 pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED)
+        {
+            buttonAccept.setVisibility(View.GONE);
+            call_state = ci.getStateText();
+            if (ci.getState() == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED) {
+                buttonHangup.setText("Hangup");
+            } else if (ci.getState() ==
+                       pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED)
+            {
+                buttonHangup.setText("OK");
+                call_state = "Call disconnected: " + ci.getLastReason();
+            }
+        }
 
-	tvPeer.setText(ci.getRemoteUri());
-	tvState.setText(call_state);
+        tvPeer.setText(ci.getRemoteUri());
+        tvState.setText(call_state);
     }
 }

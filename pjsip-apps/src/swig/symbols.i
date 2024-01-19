@@ -217,16 +217,18 @@ typedef enum pjmedia_echo_flag
   PJMEDIA_ECHO_SPEEX = 1,
   PJMEDIA_ECHO_SIMPLE = 2,
   PJMEDIA_ECHO_WEBRTC = 3,
+  PJMEDIA_ECHO_WEBRTC_AEC3 = 4,
   PJMEDIA_ECHO_ALGO_MASK = 15,
   PJMEDIA_ECHO_NO_LOCK = 16,
   PJMEDIA_ECHO_USE_SIMPLE_FIFO = 32,
   PJMEDIA_ECHO_USE_SW_ECHO = 64,
   PJMEDIA_ECHO_USE_NOISE_SUPPRESSOR = 128,
+  PJMEDIA_ECHO_USE_GAIN_CONTROLLER = 256,
   PJMEDIA_ECHO_AGGRESSIVENESS_DEFAULT = 0,
-  PJMEDIA_ECHO_AGGRESSIVENESS_CONSERVATIVE = 0x100,
-  PJMEDIA_ECHO_AGGRESSIVENESS_MODERATE = 0x200,
-  PJMEDIA_ECHO_AGGRESSIVENESS_AGGRESSIVE = 0x300,
-  PJMEDIA_ECHO_AGGRESSIVENESS_MASK = 0xF00
+  PJMEDIA_ECHO_AGGRESSIVENESS_CONSERVATIVE = 0x1000,
+  PJMEDIA_ECHO_AGGRESSIVENESS_MODERATE = 0x2000,
+  PJMEDIA_ECHO_AGGRESSIVENESS_AGGRESSIVE = 0x3000,
+  PJMEDIA_ECHO_AGGRESSIVENESS_MASK = 0xF000
 } pjmedia_echo_flag;
 
 typedef enum pjmedia_event_type
@@ -425,6 +427,14 @@ typedef enum pjmedia_orient
   PJMEDIA_ORIENT_ROTATE_270DEG
 } pjmedia_orient;
 
+typedef enum pjmedia_frame_type
+{
+    PJMEDIA_FRAME_TYPE_NONE,
+    PJMEDIA_FRAME_TYPE_AUDIO,
+    PJMEDIA_FRAME_TYPE_EXTENDED,
+    PJMEDIA_FRAME_TYPE_VIDEO
+} pjmedia_frame_type;
+
 typedef enum pjmedia_format_id
 {
   PJMEDIA_FORMAT_L16 = 0,
@@ -464,7 +474,7 @@ typedef enum pjmedia_format_id
   PJMEDIA_FORMAT_MPEG1VIDEO = ((('V' << 24) | ('1' << 16)) | ('P' << 8)) | 'M',
   PJMEDIA_FORMAT_MPEG2VIDEO = ((('V' << 24) | ('2' << 16)) | ('P' << 8)) | 'M',
   PJMEDIA_FORMAT_MPEG4 = ((('4' << 24) | ('G' << 16)) | ('P' << 8)) | 'M',
-  PJMEDIA_FORMAT_INVALID = 0xFFFFFFFF
+  PJMEDIA_FORMAT_INVALID = 0xFFFFFFF
 } pjmedia_format_id;
 
 typedef enum pjmedia_vid_packing
@@ -767,6 +777,12 @@ typedef enum pjsua_stun_use
   PJSUA_STUN_RETRY_ON_FAILURE
 } pjsua_stun_use;
 
+typedef enum pjsua_upnp_use
+{
+  PJSUA_UPNP_USE_DEFAULT,
+  PJSUA_UPNP_USE_DISABLED
+} pjsua_upnp_use;
+
 typedef enum pjsua_call_hold_type
 {
   PJSUA_CALL_HOLD_TYPE_RFC3264,
@@ -800,7 +816,11 @@ typedef enum pjsua_sip_timer_use
 typedef enum pjsua_ipv6_use
 {
   PJSUA_IPV6_DISABLED,
-  PJSUA_IPV6_ENABLED
+  PJSUA_IPV6_ENABLED = 1,
+  PJSUA_IPV6_ENABLED_NO_PREFERENCE = 1,
+  PJSUA_IPV6_ENABLED_PREFER_IPV4,
+  PJSUA_IPV6_ENABLED_PREFER_IPV6,
+  PJSUA_IPV6_ENABLED_USE_IPV6_ONLY
 } pjsua_ipv6_use;
 
 typedef enum pjsua_nat64_opt
@@ -891,6 +911,7 @@ typedef enum pjsua_snd_dev_mode
 typedef enum pjsua_ip_change_op
 {
   PJSUA_IP_CHANGE_OP_NULL,
+  PJSUA_IP_CHANGE_OP_SHUTDOWN_TP,
   PJSUA_IP_CHANGE_OP_RESTART_LIS,
   PJSUA_IP_CHANGE_OP_ACC_SHUTDOWN_TP,
   PJSUA_IP_CHANGE_OP_ACC_UPDATE_CONTACT,
