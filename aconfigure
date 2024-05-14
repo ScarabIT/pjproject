@@ -712,6 +712,7 @@ ac_pjmedia_video_has_qt
 ac_darwin_cflags
 ac_pjmedia_video_has_ios_opengl
 ac_pjmedia_video_has_vtoolbox
+ac_pjmedia_video_has_metal
 ac_pjmedia_video_has_darwin
 ac_dshow_ldflags
 ac_dshow_cflags
@@ -6517,19 +6518,26 @@ rm -f core conftest.err conftest.$ac_objext conftest.beam conftest.$ac_ext
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking ioqueue backend" >&5
 printf %s "checking ioqueue backend... " >&6; }
 
+ac_os_objs=ioqueue_select.o
+ac_linux_poll=select
+
 case $target in
 	*darwin* | *bsd*)
 		# Check whether --enable-kqueue was given.
 if test ${enable_kqueue+y}
 then :
   enableval=$enable_kqueue;
-				ac_os_objs=ioqueue_kqueue.o
-				{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: kqueue()" >&5
+				if test "$enable_kqueue" = "yes"; then
+					ac_os_objs=ioqueue_kqueue.o
+					{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: kqueue()" >&5
 printf "%s\n" "kqueue()" >&6; }
+				else
+					{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: select()" >&5
+printf "%s\n" "select()" >&6; }
+				fi
 
 else $as_nop
 
-				ac_os_objs=ioqueue_select.o
 				{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: select()" >&5
 printf "%s\n" "select()" >&6; }
 
@@ -6541,19 +6549,22 @@ fi
 if test ${enable_epoll+y}
 then :
   enableval=$enable_epoll;
-				ac_os_objs=ioqueue_epoll.o
-				{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: /dev/epoll" >&5
+				if test "$enable_epoll" = "yes"; then
+					ac_os_objs=ioqueue_epoll.o
+					{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: /dev/epoll" >&5
 printf "%s\n" "/dev/epoll" >&6; }
-				printf "%s\n" "#define PJ_HAS_LINUX_EPOLL 1" >>confdefs.h
+					printf "%s\n" "#define PJ_HAS_LINUX_EPOLL 1" >>confdefs.h
 
-				ac_linux_poll=epoll
+					ac_linux_poll=epoll
+				else
+					{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: select()" >&5
+printf "%s\n" "select()" >&6; }
+				fi
 
 else $as_nop
 
-				ac_os_objs=ioqueue_select.o
 				{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: select()" >&5
 printf "%s\n" "select()" >&6; }
-				ac_linux_poll=select
 
 fi
 
@@ -7469,6 +7480,7 @@ printf "%s\n" "Checking if OpenGL ES 2 is available... no" >&6; }
 
 
 
+
 	SAVED_LIBS="$LIBS"
 	LIBS="-framework AVFoundation -framework CoreGraphics -framework QuartzCore -framework CoreVideo -framework CoreMedia"
 	cat confdefs.h - <<_ACEOF >conftest.$ac_ext
@@ -7510,6 +7522,26 @@ else $as_nop
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.beam \
     conftest$ac_exeext conftest.$ac_ext
+	LIBS="-framework Metal"
+	cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main (void)
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"
+then :
+  ac_pjmedia_video_has_metal=yes
+else $as_nop
+  ac_pjmedia_video_has_metal=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
 	LIBS="-framework OpenGLES"
 	cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
@@ -7539,6 +7571,15 @@ printf "%s\n" "Checking if AVFoundation framework is available... yes" >&6; }
 	else
 	  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: Checking if AVFoundation framework is available... no" >&5
 printf "%s\n" "Checking if AVFoundation framework is available... no" >&6; }
+	fi
+	if test "$ac_pjmedia_video_has_metal" = "yes"; then
+	  ac_darwin_cflags+=" -DPJMEDIA_VIDEO_DEV_HAS_METAL=1"
+	  LIBS="$LIBS -framework Metal -framework MetalKit"
+	  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: Checking if Metal framework is available... yes" >&5
+printf "%s\n" "Checking if Metal framework is available... yes" >&6; }
+	else
+	  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: Checking if Metal framework is available... no" >&5
+printf "%s\n" "Checking if Metal framework is available... no" >&6; }
 	fi
 	if test "$ac_pjmedia_video_has_vtoolbox" = "yes"; then
 	  #ac_darwin_cflags+=" -DPJMEDIA_HAS_VID_TOOLBOX_CODEC=1"
