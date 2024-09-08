@@ -2287,11 +2287,14 @@ TransportInfo Endpoint::transportGetInfo(TransportId id) const PJSUA2_THROW(Erro
     return tinfo;
 }
 
+#if 0
+// pjsua_transport_set_enable() not implemented
 void Endpoint::transportSetEnable(TransportId id, bool enabled)
                                   PJSUA2_THROW(Error)
 {
     PJSUA2_CHECK_EXPR( pjsua_transport_set_enable(id, enabled) );
 }
+#endif
 
 void Endpoint::transportClose(TransportId id) PJSUA2_THROW(Error)
 {
@@ -2521,6 +2524,36 @@ void Endpoint::setCodecOpusConfig(const CodecOpusConfig &opus_cfg)
                                                            &param));
 #else
     PJ_UNUSED_ARG(opus_cfg);
+
+    PJSUA2_RAISE_ERROR(PJ_ENOTSUP);
+#endif
+}
+
+CodecLyraConfig Endpoint::getCodecLyraConfig() const PJSUA2_THROW(Error)
+{
+    CodecLyraConfig config;
+#if defined(PJMEDIA_HAS_LYRA_CODEC) && (PJMEDIA_HAS_LYRA_CODEC!=0)
+    pjmedia_codec_lyra_config lyra_cfg;
+
+    PJSUA2_CHECK_EXPR(pjmedia_codec_lyra_get_config(&lyra_cfg));
+    config.fromPj(lyra_cfg);
+#else
+    PJSUA2_RAISE_ERROR(PJ_ENOTSUP);
+#endif
+
+    return config;
+}
+
+void Endpoint::setCodecLyraConfig(const CodecLyraConfig &lyra_cfg)
+                                  PJSUA2_THROW(Error)
+{
+#if defined(PJMEDIA_HAS_LYRA_CODEC) && (PJMEDIA_HAS_LYRA_CODEC!=0)
+    pjmedia_codec_lyra_config new_lyra_cfg;
+    new_lyra_cfg = lyra_cfg.toPj();
+
+    PJSUA2_CHECK_EXPR(pjmedia_codec_lyra_set_config(&new_lyra_cfg));
+#else
+    PJ_UNUSED_ARG(lyra_cfg);
 
     PJSUA2_RAISE_ERROR(PJ_ENOTSUP);
 #endif
