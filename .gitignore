@@ -96,5 +96,6 @@ __cmake_systeminformation/
 cov-int/
 getversion.mak
 configure.out
+/vcpkg_installed/
 */Platforms/iOS/pjsua2/*
 */Platforms/iOS/lib/*

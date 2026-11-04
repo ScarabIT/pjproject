@@ -1862,7 +1862,6 @@ PJ_DEF(pj_status_t) pjsip_auth_clt_reinit_req(  pjsip_auth_clt_sess *sess,
 
 }
 
-
 PJ_DEF(pj_status_t) pjsip_auth_clt_async_configure(
                                     pjsip_auth_clt_sess *sess,
                                     const pjsip_auth_clt_async_setting *opt)
